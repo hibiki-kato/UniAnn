@@ -147,7 +147,6 @@ struct LocalKBestOptions {
     int k = 5;
     string output_filename;
     string report_filename;
-    double start_score_drop = std::numeric_limits<double>::infinity();
     bool no_dp_dump = false;
 };
 
@@ -1705,7 +1704,6 @@ static void print_alternative_summary(
 static bool parse_local_k_best_options(int argc, char **argv,
                                       LocalKBestOptions &options,
                                       string &error) {
-    bool has_drop = false;
     for (int i = 7; i < argc; ++i) {
         const string argument = argv[i];
         if (argument == "--local-k-best") {
@@ -1719,25 +1717,14 @@ static bool parse_local_k_best_options(int argc, char **argv,
                     return false;
                 }
             }
-        } else if (argument == "--local-k-output" || argument == "--local-k-report" || argument == "--local-k-start-score-drop") {
+        } else if (argument == "--local-k-output" || argument == "--local-k-report") {
             if (i + 1 >= argc) {
                 error = "Missing value for " + argument;
                 return false;
             }
             const string value = argv[++i];
             if (argument == "--local-k-output") options.output_filename = value;
-            else if (argument == "--local-k-report") options.report_filename = value;
-            else {
-                try {
-                    options.start_score_drop = stod(value);
-                    if (!isfinite(options.start_score_drop) ||
-                        options.start_score_drop < 0.0) throw invalid_argument("range");
-                    has_drop = true;
-                } catch (...) {
-                    error = "Invalid value for " + argument + ": " + value;
-                    return false;
-                }
-            }
+            else options.report_filename = value;
         } else if (argument == "--no-dp-dump") {
             options.no_dp_dump = true;
         } else if (argument == "--alternative-splicing" || argument == "--alt-include-incomplete" || argument == "--alt-debug") {
@@ -1750,7 +1737,7 @@ static bool parse_local_k_best_options(int argc, char **argv,
             return false;
         }
     }
-    if (!options.enabled && (!options.output_filename.empty() || !options.report_filename.empty() || has_drop)) {
+    if (!options.enabled && (!options.output_filename.empty() || !options.report_filename.empty())) {
         error = "local-k options require --local-k-best";
         return false;
     }
@@ -1793,7 +1780,7 @@ static bool parse_alternative_options(int argc, char **argv,
             }
         } else if (argument == "--no-dp-dump") {
             // handled elsewhere
-        } else if (argument == "--local-k-output" || argument == "--local-k-report" || argument == "--local-k-start-score-drop") {
+        } else if (argument == "--local-k-output" || argument == "--local-k-report") {
             if (i + 1 < argc) ++i; // skip value if present
         } else {
             error = "Unknown option " + argument;
@@ -1840,18 +1827,20 @@ struct LocalPathResult {
     vector<int> path_positions;
     vector<int> path_states;
     double score;
-    double actual_start_score = NEG_INF;
-    double inherited_start_score = NEG_INF;
+    // One ATG score per gene on the path, in genomic order. A local path may
+    // contain zero, one or several genes.
+    vector<double> start_scores;
 };
 
 
 struct LocalKBestCandidate {
     int reference_gene_index;
     int rank;
-    double score;
+    double score;        // score of the whole local path this gene belongs to
     double score_delta;
     double actual_start_score;
-    double inherited_start_score;
+    int genes_in_path = 1;
+    int gene_in_path = 1;
     string classification;
     bool identical_to_reference;
     TranscriptAnnotation transcript;
@@ -1885,11 +1874,12 @@ static bool run_local_k_best(
             cerr << "Error opening " << options.report_filename << " for writing\n";
             return false;
         }
-        tsv_out << "reference_gene_index\trank\treference_start_1based\t"
+        tsv_out << "reference_gene_index\trank\tgenes_in_path\tgene_in_path\t"
+                << "reference_start_1based\t"
                 << "reference_end_1based\tcandidate_start_1based\t"
                 << "candidate_end_1based\tfixed_interval_score\t"
                 << "reference_fixed_interval_score\tscore_delta\t"
-                << "actual_start_score\tinherited_start_score\tintron_chain\t"
+                << "actual_start_score\tintron_chain\t"
                 << "reference_intron_chain\t"
                 << "identical_to_reference\tclassification\n";
     }
@@ -1913,8 +1903,6 @@ static bool run_local_k_best(
 
         if (local_len <= 0) continue;
 
-        double ref_atg_score = (ref.path_start < 25) ? 1.0 : inputs.atg_score[codon_start_0based(ref.path_start)];
-
         double ref_fixed_score = inputs.emit[L_bound][0];
         PathMetadata ref_meta;
         ref_meta.predecessor_state = 0;
@@ -1928,21 +1916,14 @@ static bool run_local_k_best(
             ref_cur_state = next_state;
         }
 
-        vector<int> candidate_starts;
-        for (int p = max(L_bound, 2); p <= ref.path_start; p++) {
-            if (p == ref.path_start) {
-                candidate_starts.push_back(p);
-            } else {
-                double score = inputs.atg_score[codon_start_0based(p)];
-                if (score > NEG_INF && score >= ref_atg_score - options.start_score_drop) {
-                    candidate_starts.push_back(p);
-                }
-            }
-        }
-
-        vector<vector<ActiveCell>> prev_dp(8, vector<ActiveCell>(K));
-        vector<vector<ActiveCell>> curr_dp(8, vector<ActiveCell>(K));
-        vector<CompactBP> backpointers(local_len * 8 * K, CompactBP{-1, -1});
+        // The local decoder solves exactly the UniAnn problem on [L_bound, R_bound]
+        // with both endpoints pinned to N: same states, same transitions, same
+        // structural constraints. The only difference from run_viterbi is that
+        // each cell keeps the top K partial paths instead of the single best.
+        vector<vector<ActiveCell>> prev_dp(NUM_STATES, vector<ActiveCell>(K));
+        vector<vector<ActiveCell>> curr_dp(NUM_STATES, vector<ActiveCell>(K));
+        vector<CompactBP> backpointers(static_cast<size_t>(local_len) * NUM_STATES * K,
+                                       CompactBP{-1, -1});
 
         prev_dp[0][0].dp = 0.0 + inputs.emit[L_bound][0];
         prev_dp[0][0].metadata.inter_len = 1;
@@ -1950,34 +1931,20 @@ static bool run_local_k_best(
 
         for (int i = 1; i < local_len; i++) {
             int p = L_bound + i;
-            bool is_cand_start = (find(candidate_starts.begin(), candidate_starts.end(), p) != candidate_starts.end());
 
-            for (int to = 0; to < 8; to++) {
+            for (int to = 0; to < NUM_STATES; to++) {
                 vector<PathCandidate> candidates;
 
-                for (int from = 0; from < 8; from++) {
-                    if (to == 0 && from != 0) continue;
-                    if (to == 7 && from != 7 && !is_exon(from)) continue;
-                    if (to == 7 && is_exon(from) && p < ref.path_start)
-                        continue;
-                    if (is_exon(to) && from == 7) continue;
-                    if (is_intron(to) && from == 7) continue;
-                    if (from == 0 && is_exon(to) && !is_cand_start) continue;
-
-                    int to_orig = (to == 7) ? 0 : to;
-                    int from_orig = (from == 7) ? 0 : from;
-
+                for (int from = 0; from < NUM_STATES; from++) {
                     for (int k = 0; k < K; k++) {
                         if (prev_dp[from][k].dp <= NEG_INF) continue;
 
-                        TransitionResult evaluated = evaluate_transition(p, from_orig, to_orig, prev_dp[from][k].metadata, inputs);
-
-                        if (from == 0 && is_exon(to) && is_cand_start && evaluated.allowed) {
-                            evaluated.transition_score = ref_atg_score;
-                        }
+                        TransitionResult evaluated = evaluate_transition(
+                            p, from, to, prev_dp[from][k].metadata, inputs);
 
                         if (evaluated.allowed) {
-                            double score = prev_dp[from][k].dp + evaluated.transition_score + evaluated.emission_score;
+                            double score = prev_dp[from][k].dp +
+                                evaluated.transition_score + evaluated.emission_score;
                             candidates.push_back({score, from, k, evaluated});
                         }
                     }
@@ -1987,11 +1954,13 @@ static bool run_local_k_best(
                 for (int k = 0; k < min(K, (int)candidates.size()); k++) {
                     curr_dp[to][k].dp = candidates[k].score;
                     curr_dp[to][k].metadata = candidates[k].evaluated.next_metadata;
-                    backpointers[i * 8 * K + to * K + k] = CompactBP{static_cast<int16_t>(candidates[k].from_state), static_cast<int16_t>(candidates[k].from_k)};
+                    backpointers[static_cast<size_t>(i) * NUM_STATES * K + to * K + k] =
+                        CompactBP{static_cast<int16_t>(candidates[k].from_state),
+                                  static_cast<int16_t>(candidates[k].from_k)};
                 }
             }
             prev_dp = curr_dp;
-            for (int to = 0; to < 8; to++) {
+            for (int to = 0; to < NUM_STATES; to++) {
                 for (int k = 0; k < K; k++) {
                     curr_dp[to][k].dp = NEG_INF;
                 }
@@ -2000,29 +1969,29 @@ static bool run_local_k_best(
 
         vector<LocalPathResult> paths;
         for (int k = 0; k < K; k++) {
-            if (prev_dp[7][k].dp <= NEG_INF) continue;
+            if (prev_dp[0][k].dp <= NEG_INF) continue;
 
             LocalPathResult res;
-            res.score = prev_dp[7][k].dp;
+            res.score = prev_dp[0][k].dp;
 
-            int cur_state = 7;
+            int cur_state = 0;
             int cur_k = k;
             bool valid = true;
 
             for (int i = local_len - 1; i >= 0; i--) {
                 int p = L_bound + i;
                 res.path_positions.push_back(p);
-                res.path_states.push_back(cur_state == 7 ? 0 : cur_state);
+                res.path_states.push_back(cur_state);
 
                 if (i > 0) {
-                    CompactBP bp = backpointers[i * 8 * K + cur_state * K + cur_k];
+                    CompactBP bp = backpointers[static_cast<size_t>(i) * NUM_STATES * K +
+                                                cur_state * K + cur_k];
                     int next_state = bp.bt_state;
                     int next_k = bp.bt_k;
                     if (next_state < 0) { valid = false; break; }
 
                     if (next_state == 0 && is_exon(cur_state)) {
-                        res.actual_start_score = inputs.atg_score[codon_start_0based(p)];
-                        res.inherited_start_score = ref_atg_score;
+                        res.start_scores.push_back(inputs.atg_score[codon_start_0based(p)]);
                     }
 
                     cur_state = next_state;
@@ -2033,6 +2002,7 @@ static bool run_local_k_best(
             if (valid) {
                 reverse(res.path_positions.begin(), res.path_positions.end());
                 reverse(res.path_states.begin(), res.path_states.end());
+                reverse(res.start_scores.begin(), res.start_scores.end());
                 paths.push_back(res);
             }
         }
@@ -2040,55 +2010,70 @@ static bool run_local_k_best(
         vector<LocalKBestCandidate> unique_candidates;
         set<string> seen;
 
+        // A local path is one candidate. Paths that annotate nothing (all N) are
+        // dropped; paths carrying several genes are kept and reported as several
+        // gene records under the same rank.
+        int rank_count = 0;
         for (const auto &path : paths) {
             auto anns = build_transcript_annotations(path.path_positions, path.path_states, seqid);
             if (anns.empty()) continue;
-            TranscriptAnnotation ann = anns[0];
-            ann.score = path.score;
 
-            string key = full_transcript_key(ann);
-            if (seen.insert(key).second) {
+            string key;
+            for (const auto &ann : anns) key += full_transcript_key(ann) + "|";
+            if (!seen.insert(key).second) continue;
+
+            ++rank_count;
+            const string ref_key = full_transcript_key(ref);
+            for (size_t j = 0; j < anns.size(); ++j) {
+                TranscriptAnnotation ann = anns[j];
+                ann.score = path.score;
+
                 LocalKBestCandidate cand;
+                cand.rank = rank_count;
                 cand.transcript = ann;
                 cand.score = path.score;
                 cand.score_delta = path.score - ref_fixed_score;
-                cand.actual_start_score = path.actual_start_score;
-                cand.inherited_start_score = path.inherited_start_score;
+                cand.actual_start_score = j < path.start_scores.size()
+                    ? path.start_scores[j] : NEG_INF;
+                cand.genes_in_path = static_cast<int>(anns.size());
+                cand.gene_in_path = static_cast<int>(j) + 1;
                 cand.classification = classify_splice_difference(ref, ann);
-                cand.identical_to_reference = (key == full_transcript_key(ref));
+                cand.identical_to_reference =
+                    (anns.size() == 1 && full_transcript_key(ann) == ref_key);
                 unique_candidates.push_back(cand);
             }
-            if (unique_candidates.size() >= static_cast<size_t>(K)) break;
+            if (rank_count >= K) break;
         }
 
 
-        if (unique_candidates.size() > 0 && gff_out) {
-            int min_start = unique_candidates[0].transcript.genomic_start_0based;
-            int max_end = unique_candidates[0].transcript.genomic_end_0based_exclusive;
-            for (const auto &cand : unique_candidates) {
-                min_start = min(min_start, cand.transcript.genomic_start_0based);
-                max_end = max(max_end, cand.transcript.genomic_end_0based_exclusive);
-            }
-            string g_id = "gene" + to_string(ref_idx + 1);
-            gff_out << ref.sequence_id << "\tUniAnn\tgene\t"
-                << min_start + 1 << '\t'
-                << max_end << "\t.\t+\t.\tID="
-                << g_id << "\n";
+        // The search interval is reported as a locus; each gene of each ranked
+        // path becomes its own gene record inside it.
+        string locus_id = "locus" + to_string(ref_idx + 1);
+        if (!unique_candidates.empty() && gff_out) {
+            gff_out << ref.sequence_id << "\tUniAnn\tlocus\t"
+                << L_bound + 1 << '\t' << R_bound + 1
+                << "\t.\t+\t.\tID=" << locus_id << "\n";
         }
 
-        for (size_t rank = 0; rank < unique_candidates.size(); ++rank) {
-
-            const auto &cand = unique_candidates[rank];
-            string t_id = "gene" + to_string(ref_idx + 1) + ".local_k" + to_string(rank + 1);
-            string g_id = "gene" + to_string(ref_idx + 1);
+        for (const auto &cand : unique_candidates) {
+            string g_id = locus_id + ".k" + to_string(cand.rank) +
+                          ".g" + to_string(cand.gene_in_path);
+            string t_id = g_id + ".t1";
 
             if (gff_out) {
+                gff_out << cand.transcript.sequence_id << "\tUniAnn\tgene\t"
+                    << cand.transcript.genomic_start_0based + 1 << '\t'
+                    << cand.transcript.genomic_end_0based_exclusive
+                    << "\t.\t+\t.\tID=" << g_id
+                    << ";Parent=" << locus_id << "\n";
                 write_hierarchical_transcript(gff_out, cand.transcript, g_id, t_id);
             }
 
             if (tsv_out) {
                 tsv_out << (ref_idx + 1) << '\t'
-                        << (rank + 1) << '\t'
+                        << cand.rank << '\t'
+                        << cand.genes_in_path << '\t'
+                        << cand.gene_in_path << '\t'
                         << (ref.genomic_start_0based + 1) << '\t'
                         << ref.genomic_end_0based_exclusive << '\t'
                         << (cand.transcript.genomic_start_0based + 1) << '\t'
@@ -2097,7 +2082,6 @@ static bool run_local_k_best(
                         << ref_fixed_score << '\t'
                         << cand.score_delta << '\t'
                         << cand.actual_start_score << '\t'
-                        << cand.inherited_start_score << '\t'
                         << tsv_escape_chain(cand.transcript) << '\t'
                         << tsv_escape_chain(ref) << '\t'
                         << (cand.identical_to_reference ? "1" : "0") << '\t'
@@ -2121,7 +2105,7 @@ int main(int argc, char** argv) {
              << " [--alt-min-score-delta SCORE] [--alt-include-incomplete]"
              << " [--alt-debug]\n"
              << "             [--local-k-best K] [--local-k-output FILE]\n"
-             << "             [--local-k-report FILE] [--local-k-start-score-drop SCORE]\n"
+             << "             [--local-k-report FILE]\n"
              << "             [--no-dp-dump]\n";
         return 1;
     }

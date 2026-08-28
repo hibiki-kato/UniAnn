@@ -17,7 +17,6 @@ ALT_OUTPUT=
 ALT_ARGS=()
 LOCAL_K_ENABLED=0
 LOCAL_K_OUTPUT=
-LOCAL_K_RATIO=0.5
 LOCAL_K_ARGS=()
 if tty -s < /dev/fd/1 2> /dev/null; then
     GC='\e[0;32m'
@@ -61,7 +60,6 @@ echo "--alt-debug print alternative-search diagnostics"
 echo "--local-k-best [K] enable gene-local k-best transcript search (default K=5)"
 echo "--local-k-output file write the k-best GFF3 annotation"
 echo "--local-k-report file write the diagnostic TSV"
-echo "--local-k-start-ratio candidate/reference start likelihood ratio in (0,1] (default 0.5)"
 }
 
 #parsing arguments
@@ -118,17 +116,13 @@ do
                 shift
             fi
             ;;
-        --local-k-output|--local-k-report|--local-k-start-ratio)
+        --local-k-output|--local-k-report)
             if [[ $# -lt 2 ]]; then
                 error_exit "Missing value for $1"
             fi
-            if [[ "$1" == "--local-k-start-ratio" ]]; then
-                LOCAL_K_RATIO="$2"
-            else
-                LOCAL_K_ARGS+=("$1" "$2")
-                if [[ "$1" == "--local-k-output" ]]; then
-                    LOCAL_K_OUTPUT="$2"
-                fi
+            LOCAL_K_ARGS+=("$1" "$2")
+            if [[ "$1" == "--local-k-output" ]]; then
+                LOCAL_K_OUTPUT="$2"
             fi
             shift
             ;;
@@ -191,11 +185,6 @@ elif [[ ${#ALT_ARGS[@]} -gt 0 ]]; then
 fi
 
 if [[ $LOCAL_K_ENABLED -eq 1 ]]; then
-  if ! perl -e '$r=shift; exit(!(defined($r) && $r =~ /^(?:\d+(?:\.\d*)?|\.\d+)$/ && $r > 0 && $r <= 1))' "$LOCAL_K_RATIO"; then
-    error_exit "--local-k-start-ratio must be a number in (0,1]"
-  fi
-  DROP=$(perl -e "print (-$FACTOR * log($LOCAL_K_RATIO))")
-  LOCAL_K_ARGS+=("--local-k-start-score-drop" "$DROP")
   # -n suppresses the Viterbi matrix; without it the DP/BT dump is kept
   if [[ "$OUTDEV" == "/dev/null" ]]; then
     LOCAL_K_ARGS+=("--no-dp-dump")

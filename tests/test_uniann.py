@@ -369,10 +369,9 @@ def test_local_kbest_cli_validation():
         completed = run(inputs, "--local-k-output", Path(temporary) / "bad.gff")
         assert completed.returncode == 1
 
-        completed = run(inputs, "--local-k-best",
-                        "--local-k-start-score-drop", "-1",
-                        "--no-dp-dump")
+        completed = run(inputs, "--local-k-start-score-drop", "1")
         assert completed.returncode == 1
+        assert b"Unknown option" in completed.stderr
 def test_local_kbest_unique_dedup():
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -388,12 +387,13 @@ def test_local_kbest_unique_dedup():
         transcripts = [a["ID"] for f, a in features if f[2] == "transcript"]
         assert len(transcripts) <= 10
 
-def test_local_kbest_candidate_start_inherited_score():
+def test_local_kbest_uses_actual_start_scores():
+    """No score inheritance: each candidate start keeps its own ATG score."""
     with tempfile.TemporaryDirectory() as temporary:
         length = 170
         sequence = ["A"] * length
         sequence[0:3] = "ATG"
-        sequence[10:13] = "ATG"
+        sequence[9:12] = "ATG"   # in frame with the stop at 120
         sequence[120:123] = "TAA"
         emissions = []
         for position in range(length):
@@ -402,16 +402,48 @@ def test_local_kbest_candidate_start_inherited_score():
                 values[1] = 1.0
             emissions.append(values)
         inputs = write_inputs(temporary, "single", "".join(sequence), emissions,
-                              atg=[(0, 100), (10, 80)], stop=[(120, 100)])
+                              atg=[(0, 100), (9, 80)], stop=[(120, 100)])
         gff = Path(temporary) / "single.gff3"
         report = Path(temporary) / "single.tsv"
-        completed = run(inputs, "--local-k-best", "--local-k-output", gff,
-                        "--local-k-report", report, "--local-k-start-score-drop", "50")
-        assert completed.returncode == 0
-        rows = list(csv.DictReader(report.open(), delimiter="	"))
-        inherited = [float(r["inherited_start_score"]) for r in rows if r["actual_start_score"] != "."]
-        actual = [float(r["actual_start_score"]) for r in rows if r["actual_start_score"] != "."]
-        assert any(abs(i - a) > 10 for i, a in zip(inherited, actual)), "Inherited score should differ from actual for alternates"
+        completed = run(inputs, "--local-k-best", "5", "--local-k-output", gff,
+                        "--local-k-report", report)
+        assert completed.returncode == 0, completed.stderr.decode()
+        rows = list(csv.DictReader(report.open(), delimiter="\t"))
+        starts = {int(row["candidate_start_1based"]): float(row["actual_start_score"])
+                  for row in rows if row["actual_start_score"] != "."}
+        assert starts.get(1) == 100.0
+        assert starts.get(10) == 80.0, starts
+        assert_valid_gff(gff)
+
+
+def test_local_kbest_rank1_equals_global_viterbi():
+    """K=1 must reproduce the ordinary UniAnn Viterbi annotation."""
+    for kind in ("donor", "acceptor"):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            inputs = make_spliced_fixture(directory, kind)
+            gff = directory / "k1.gff3"
+            global_run = run(inputs, "--no-dp-dump")
+            assert global_run.returncode == 0, global_run.stderr.decode()
+            local_run = run(inputs, "--local-k-best", "1",
+                            "--local-k-output", gff, "--no-dp-dump")
+            assert local_run.returncode == 0, local_run.stderr.decode()
+
+            def structures(features):
+                # The primary output leaves the phase column as "."; compare
+                # the CDS segment coordinates only.
+                by_parent = {}
+                for fields, attributes in features:
+                    if fields[2] != "CDS":
+                        continue
+                    by_parent.setdefault(attributes["Parent"], []).append(
+                        (int(fields[3]), int(fields[4])))
+                return {tuple(sorted(v)) for v in by_parent.values()}
+
+            global_gff = directory / "global.gff3"
+            global_gff.write_bytes(global_run.stdout)
+            assert structures(parse_gff(global_gff)) == structures(parse_gff(gff)), kind
+
 
 def test_local_kbest_stopping_before_next_gene():
     with tempfile.TemporaryDirectory() as temporary:
