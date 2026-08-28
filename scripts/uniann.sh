@@ -196,7 +196,10 @@ if [[ $LOCAL_K_ENABLED -eq 1 ]]; then
   fi
   DROP=$(perl -e "print (-$FACTOR * log($LOCAL_K_RATIO))")
   LOCAL_K_ARGS+=("--local-k-start-score-drop" "$DROP")
-  LOCAL_K_ARGS+=("--no-dp-dump")
+  # -n suppresses the Viterbi matrix; without it the DP/BT dump is kept
+  if [[ "$OUTDEV" == "/dev/null" ]]; then
+    LOCAL_K_ARGS+=("--no-dp-dump")
+  fi
   if [[ -z "$LOCAL_K_OUTPUT" ]]; then
     LOCAL_K_ARGS+=("--local-k-output" "$FASTA.uniann.local_k_best.gff")
   fi
