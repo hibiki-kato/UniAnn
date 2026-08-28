@@ -58,7 +58,7 @@ echo "--alt-max-distance bp maximum search distance from each anchor (default 10
 echo "--alt-min-score-delta score filter complete alternatives below this delta"
 echo "--alt-include-incomplete include incomplete candidates in the TSV only"
 echo "--alt-debug print alternative-search diagnostics"
-echo "--local-k-best enable gene-local k-best transcript search (K=5)"
+echo "--local-k-best [K] enable gene-local k-best transcript search (default K=5)"
 echo "--local-k-output file write the k-best GFF3 annotation"
 echo "--local-k-report file write the diagnostic TSV"
 echo "--local-k-start-ratio candidate/reference start likelihood ratio in (0,1] (default 0.5)"
@@ -113,6 +113,10 @@ do
         --local-k-best)
             LOCAL_K_ENABLED=1
             LOCAL_K_ARGS+=("$1")
+            if [[ $# -gt 1 && "$2" =~ ^[0-9]+$ ]]; then
+                LOCAL_K_ARGS+=("$2")
+                shift
+            fi
             ;;
         --local-k-output|--local-k-report|--local-k-start-ratio)
             if [[ $# -lt 2 ]]; then
