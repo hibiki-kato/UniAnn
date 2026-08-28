@@ -48,3 +48,8 @@ __pycache__/
 
 # install.sh output
 bin/
+src/uniann
+src/compute_markov_scores
+src/test_classification
+src/*.o
+src/*.d
