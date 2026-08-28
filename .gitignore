@@ -39,3 +39,12 @@
 
 # debug information files
 *.dwo
+
+# Input and intermediate data
+data/
+
+# Python cache
+__pycache__/
+
+# install.sh output
+bin/
