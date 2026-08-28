@@ -6,6 +6,8 @@ FASTA="genome.fa"
 PSAURON="psauron_score.csv"
 SCOREFILE="scores.txt"
 MULT=`perl -e 'print exp(1)'`
+OUTDEV="out.err"
+MIN_CDS=200
 
 GC=
 RC=
@@ -46,8 +48,9 @@ echo "Usage:"
 echo "uniann.sh [arguments]"
 echo "-f file sith a single fasta sequence"
 echo "-m multiplier to rescale probabilities before applying log, must be a number between 1 and 100, default: exp(1)"
-echo "-s file with AI-derived scores"
+echo "-s file with scores for starts, stops and splice sites, 1-based coordinates"
 echo "-p psauron score file"
+echo "-n (flag) do not save Viterbi matrix in out.err"
 echo "--alternative-splicing enable anchored alternative-transcript search"
 echo "--alt-output file write the additional UniAnn-format GFF3 annotation"
 echo "--alt-report file write the optional diagnostic TSV"
@@ -83,6 +86,9 @@ do
         -m|--mult)
             MULT="$2"
             shift
+            ;;
+        -n|--noviterbi)
+            OUTDEV="/dev/null"
             ;;
         -s|--scores)
             SCOREFILE="$2"
@@ -161,8 +167,8 @@ if [ ! -s out.ps.txt ];then
   $MYPATH/preprocess_psauron_scores.pl $FASTA $PSAURON
 fi
 
-FACTOR=`cat $SCOREFILE |perl -ane '{$F[5]=$F[6] if($#F>5);;print join("\t",@F),"\n" if($F[2] eq "+");}'|perl -ane 'BEGIN{$max_score=0}{if($F[3] eq "donor"){$score=log($F[5]*'$MULT'+1e-10);$max_score=$score if($score>$max_score);}}END{die("Incorrect scores in the input file: must be between 0 and 1!") if($max_score<=0);print int(900/$max_score+0.5)}'` && \
-log "Multiplier is $MULT, FACTOR is $FACTOR" && \
+FACTOR=`cat $SCOREFILE |perl -ane '{$F[5]=$F[6] if($#F>5);;print join("\t",@F),"\n" if($F[2] eq "+");}'|perl -ane 'BEGIN{$max_score=0}{if($F[3] eq "donor"){$score=log($F[5]*'$MULT'+1e-10);$max_score=$score if($score>$max_score);}}END{die("Incorrect scores in the input file: must be between 0 and 1!") if($max_score<=0);print int(1000/$max_score+0.5)}'` && \
+log "Multiplier is $MULT, Factor is $FACTOR" && \
 #this produces out.atg.txt out.gt.txt and out.ag.txt out.stop
 cat $SCOREFILE | \
   perl -ane '{$F[5]=$F[-1] if($#F>5);;print join("\t",@F),"\n" if($F[2] eq "+");}' | \
@@ -195,7 +201,22 @@ elif [[ ${#LOCAL_K_ARGS[@]} -gt 0 ]]; then
 fi
 
 log "Building gene models" && \
-$MYPATH/uniann "$FASTA" out.ps.txt out.gt.txt out.ag.txt out.atg.txt out.stop.txt "${ALT_ARGS[@]}" "${LOCAL_K_ARGS[@]}" 2>out.err |\
-  gffread -F > $FASTA.gff.tmp && \
-mv $FASTA.gff.tmp $FASTA.uniann.gff && \
+#also enforce MIN_CDS
+$MYPATH/uniann "$FASTA" out.ps.txt out.gt.txt out.ag.txt out.atg.txt out.stop.txt "${ALT_ARGS[@]}" "${LOCAL_K_ARGS[@]}" 2>$OUTDEV | \
+  gffread --tlf |\
+  perl -F'\t' -ane '{
+    if($F[8]=~/exonCount=(1|2);exons=(\S+);CDS=(\d+):(\d+);CDSphase=\d/){
+      $cdslen=0;
+      @exons=split(/,/,$2);
+      foreach $e(@exons){
+        $cdslen+=$2-$1+1 if($e=~/(\d+)-(\d+)/);
+      }
+      print if($cdslen>'$MIN_CDS');
+    }else{
+      print;
+    }
+  }' |\
+  gffread > $FASTA.gff.tmp && \
+mv $FASTA.gff.tmp $FASTA.uniann.gff
+
 echo "Output gff file is $FASTA.uniann.gff"

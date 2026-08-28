@@ -34,8 +34,8 @@ static const array<string, NUM_STATES> state_name = {
 };
 
 static const double NEG_INF = -1e9;
-static const int MIN_INTRON = 30;
-static const int MIN_EXON   = 30;
+static const int MIN_INTRON = 40;
+static const int MIN_EXON   = 3;
 static const int MIN_INTER  = 30;
 static const int MIN_SINGLE = 100;
 static const double SCORE_TOLERANCE = 1e-8;
@@ -205,8 +205,8 @@ string read_fasta(const string &file) {
 //------------------------------------------------------------
 // Load emissions: pos \t 7 values
 //------------------------------------------------------------
-vector<array<double, NUM_STATES>> load_emissions(const string &file, int L) {
-    vector<array<double, NUM_STATES>> emit(L);
+vector<array<float, NUM_STATES>> load_emissions(const string &file, int L) {
+    vector<array<float, NUM_STATES>> emit(L);
     for (int i = 0; i < L; i++)
         for (int s = 0; s < NUM_STATES; s++)
             emit[i][s] = NEG_INF;
@@ -226,12 +226,16 @@ vector<array<double, NUM_STATES>> load_emissions(const string &file, int L) {
             cerr << "Invalid emission position in " << file << ": " << line << "\n";
             exit(1);
         }
-        for (int s = 0; s < NUM_STATES; s++) {
+        // upstream: file now carries a single intron column; states 5 and 6
+        // share the intron emission
+        for (int s = 0; s < NUM_STATES-2; s++) {
             if (!(ss >> emit[pos][s]) || isnan(emit[pos][s])) {
                 cerr << "Invalid emission row in " << file << ": " << line << "\n";
                 exit(1);
             }
         }
+        emit[pos][5]=emit[pos][4];
+        emit[pos][6]=emit[pos][4];
     }
     return emit;
 }
@@ -372,15 +376,15 @@ vector<vector<double>> init_transitions() {
 //------------------------------------------------------------
 struct DPCell {
     double dp;
-    int bt;
+    short int bt;
     int intron_len;
     int exon_len;
     int inter_len;
-    int exon_from;
+    short int exon_from;
 };
 
 vector<vector<DPCell>> init_dp(int L,
-                               const vector<array<double, NUM_STATES>> &emit)
+                               const vector<array<float, NUM_STATES>> &emit)
 {
     vector<vector<DPCell>> dp(L, vector<DPCell>(NUM_STATES));
 
@@ -404,7 +408,7 @@ vector<vector<DPCell>> init_dp(int L,
 // Authoritative transition evaluation
 //------------------------------------------------------------
 struct ModelInputs {
-    const vector<array<double, NUM_STATES>> &emit;
+    const vector<array<float, NUM_STATES>> &emit;
     const vector<double> &gt_score;
     const vector<double> &ag_score;
     const vector<double> &atg_score;
@@ -597,7 +601,7 @@ static void assign_metadata(DPCell &cell, const PathMetadata &metadata) {
 //------------------------------------------------------------
 void run_viterbi(
     vector<vector<DPCell>> &dp,
-    const vector<array<double, NUM_STATES>> &emit,
+    const vector<array<float, NUM_STATES>> &emit,
     const vector<double> &gt_score,
     const vector<double> &ag_score,
     const vector<double> &atg_score,
@@ -2189,16 +2193,8 @@ int main(int argc, char** argv) {
     if (!local_k_options.no_dp_dump) {
         //print DP and BT matrices
         for (int i = 0; i < L; i++) {
-            cerr << i << "\tdp";
-            for (int j = 0; j < 7; j++) {
-              fprintf(stderr,"\t%d",int(dp[i][j].dp));
-            }
-            cerr << "\n";
-            cerr << i << "\tbt";
-            for (int j = 0; j < 7; j++) {
-              fprintf(stderr,"\t%d",int(dp[i][j].bt));
-            }
-            cerr << "\n";
+          fprintf(stderr,"%d\tdp\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",i,int(dp[i][0].dp),int(dp[i][1].dp),int(dp[i][2].dp),int(dp[i][3].dp),int(dp[i][4].dp),int(dp[i][5].dp),int(dp[i][6].dp));
+          fprintf(stderr,"%d\tbt\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",i,int(dp[i][0].bt),int(dp[i][1].bt),int(dp[i][2].bt),int(dp[i][3].bt),int(dp[i][4].bt),int(dp[i][5].bt),int(dp[i][6].bt));
         }
     }
 

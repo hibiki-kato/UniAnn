@@ -74,7 +74,7 @@ int main() {
 
     const int length = 180;
     vector<char> sequence(length, 'A');
-    vector<array<double, NUM_STATES>> emissions(length);
+    vector<array<float, NUM_STATES>> emissions(length);
     for (auto &row : emissions) row.fill(0.0);
     vector<double> gt(length, NEG_INF), ag(length, NEG_INF);
     vector<double> atg(length, NEG_INF), stop(length, NEG_INF);
@@ -106,11 +106,11 @@ int main() {
     assert(valid_donor.allowed && valid_donor.transition_score == 7.0);
     assert(!evaluate_transition(61, 1, 5, exon, inputs).allowed);
     PathMetadata short_exon = exon;
-    short_exon.exon_len = 10;
+    short_exon.exon_len = 2; // below MIN_EXON = 3
     assert(!evaluate_transition(61, 1, 4, short_exon, inputs).allowed);
 
     PathMetadata intron;
-    intron.intron_len = 28; // plus the AG gives a 30-base intron
+    intron.intron_len = 40; // plus the AG gives a 42-base intron
     const auto valid_acceptor = evaluate_transition(91, 4, 1, intron, inputs);
     assert(valid_acceptor.allowed && valid_acceptor.transition_score == 11.0);
     assert(!evaluate_transition(91, 4, 2, intron, inputs).allowed);

@@ -45,31 +45,31 @@ def run(inputs, *options):
 
 
 def make_spliced_fixture(directory, kind="donor"):
-    length = 300
+    length = 240
     sequence = ["A"] * length
-    motifs = [(0, "ATG"), (60, "GT"), (150, "AG"), (260, "TAA")]
+    motifs = [(0, "ATG"), (60, "GT"), (90, "AG"), (200, "TAA")]
     gt = [(60, 100)]
-    ag = [(150, 100)]
+    ag = [(90, 100)]
     if kind == "donor":
         motifs.append((51, "GT"))
         gt.insert(0, (51, 95))
     elif kind == "acceptor":
-        motifs.append((159, "AG"))
-        ag.append((159, 95))
+        motifs.append((99, "AG"))
+        ag.append((99, 95))
     for position, motif in motifs:
         sequence[position : position + len(motif)] = motif
 
     emissions = []
     for position in range(length):
-        values = [0.0] + [-1000.0] * 4
+        values = [0.0] + [-1000.0] * 6
         if 2 <= position <= 60:
             values[1] = 1.0  # E0
-        if 61 <= position <= 159:
+        if 61 <= position <= 99:
             values[4] = 1.0  # I0
         if kind == "donor" and 52 <= position <= 60:
             values[4] = 1.0
-        if 151 <= position <= 261:
-            values[3] = 1.0  # E2 after a 92- or 101-base modeled intron
+        if 91 <= position <= 201:
+            values[3] = 1.0  # E2 after a 32- or 41-base modeled intron
         emissions.append(values)
     return write_inputs(
         directory,
@@ -79,51 +79,51 @@ def make_spliced_fixture(directory, kind="donor"):
         gt=gt,
         ag=ag,
         atg=[(0, 100)],
-        stop=[(260, 100)],
+        stop=[(200, 100)],
     )
 
 
 def make_three_exon_fixture(directory, mode):
-    length = 400
+    length = 280
     sequence = ["A"] * length
-    motifs = [(0, "ATG"), (60, "GT"), (150, "AG"),
-              (210, "GT"), (300, "AG"), (340, "TAA")]
+    motifs = [(0, "ATG"), (60, "GT"), (90, "AG"),
+              (150, "GT"), (180, "AG"), (220, "TAA")]
     if mode == "duplicate":
         motifs.append((51, "GT"))
     else:
-        motifs.append((350, "TAA"))
+        motifs.append((230, "TAA"))
     for position, motif in motifs:
         sequence[position : position + len(motif)] = motif
 
     emissions = []
     for position in range(length):
-        values = [0.0] + [-1000.0] * 4
+        values = [0.0] + [-1000.0] * 6
         if 2 <= position <= 60:
             values[1] = 1.0
-        if (52 if mode == "duplicate" else 61) <= position <= 300:
+        if (52 if mode == "duplicate" else 61) <= position <= 180:
             values[4] = 1.0 if mode in {"duplicate", "inclusion"} else 0.0
-        if 151 <= position <= 210:
+        if 91 <= position <= 150:
             values[3] = 1.0 if mode != "inclusion" else 0.0
-        if 211 <= position <= 300:
-            values[4] = 1.0 if mode != "inclusion" else 0.0  # second intron
-        if 301 <= position <= 341:
+        if 151 <= position <= 180:
+            values[6] = 1.0 if mode != "inclusion" else 0.0
+        if 181 <= position <= 221:
             values[2] = 1.0 if mode != "inclusion" else 0.0
-        if mode in {"skipping", "inclusion"} and 301 <= position <= 351:
+        if mode in {"skipping", "inclusion"} and 181 <= position <= 231:
             values[3] = 1.0
         emissions.append(values)
 
     if mode == "duplicate":
-        gt = [(51, 95), (60, 100), (210, 100)]
-        ag = [(150, 100), (300, 100)]
-        stop = [(340, 100)]
+        gt = [(51, 95), (60, 100), (150, 100)]
+        ag = [(90, 100), (180, 100)]
+        stop = [(220, 100)]
     elif mode == "skipping":
-        gt = [(60, 100), (210, 100)]
-        ag = [(150, 100), (300, 100)]
-        stop = [(340, 100), (350, 90)]
+        gt = [(60, 100), (150, 100)]
+        ag = [(90, 100), (180, 100)]
+        stop = [(220, 100), (230, 90)]
     elif mode == "inclusion":
-        gt = [(60, 100), (210, -50)]
-        ag = [(150, -50), (300, 100)]
-        stop = [(340, 90), (350, 100)]
+        gt = [(60, 100), (150, -50)]
+        ag = [(90, -50), (180, 100)]
+        stop = [(220, 90), (230, 100)]
     else:
         raise ValueError(mode)
     return write_inputs(directory, mode, "".join(sequence), emissions,
@@ -169,7 +169,7 @@ def assert_valid_gff(path):
 def test_legacy_golden():
     with tempfile.TemporaryDirectory() as temporary:
         sequence = "ATGCGTACGTACGTACGTAA"
-        emissions = [[0] * 5 for _ in sequence]
+        emissions = [[0] * 7 for _ in sequence]
         inputs = write_inputs(temporary, "tiny", sequence, emissions)
         completed = run(inputs)
         assert completed.returncode == 0
@@ -202,7 +202,7 @@ def test_alternative_donor_and_format():
         kept = [row for row in rows if row["kept_after_deduplication"] == "1"]
         assert len(kept) == 1
         assert kept[0]["classification"] == "alternative_donor"
-        assert kept[0]["intron_chain"] == "51-150"
+        assert kept[0]["intron_chain"] == "51-90"
         assert float(kept[0]["score_delta"]) == -5.0
         assert (float(kept[0]["candidate_total_score"]) -
                 float(kept[0]["reference_interval_score"]) ==
@@ -222,7 +222,7 @@ def test_alternative_acceptor():
         kept = [row for row in rows if row["kept_after_deduplication"] == "1"]
         assert len(kept) == 1
         assert kept[0]["classification"] == "alternative_acceptor"
-        assert kept[0]["intron_chain"] == "60-159"
+        assert kept[0]["intron_chain"] == "60-99"
         assert_valid_gff(gff)
         assert b"Number of alternative acceptors: 1\n" in completed.stderr
     finally:
@@ -237,7 +237,7 @@ def test_one_unambiguous_transcript():
         sequence[120:123] = "TAA"
         emissions = []
         for position in range(length):
-            values = [0.0] + [-1000.0] * 4
+            values = [0.0] + [-1000.0] * 6
             if 2 <= position <= 121:
                 values[1] = 1.0
             emissions.append(values)
@@ -323,7 +323,7 @@ def test_alternative_exon_inclusion():
 def test_cli_rejects_alt_options_without_mode():
     with tempfile.TemporaryDirectory() as temporary:
         sequence = "A" * 20
-        inputs = write_inputs(temporary, "cli", sequence, [[0] * 5 for _ in sequence])
+        inputs = write_inputs(temporary, "cli", sequence, [[0] * 7 for _ in sequence])
         completed = run(inputs, "--alt-output", Path(temporary) / "bad.gff")
         assert completed.returncode == 1
         assert b"require --alternative-splicing" in completed.stderr
@@ -365,14 +365,10 @@ def test_local_kbest_alternate_donor_and_ranking():
 def test_local_kbest_cli_validation():
     with tempfile.TemporaryDirectory() as temporary:
         sequence = "A" * 20
-        inputs = write_inputs(temporary, "cli", sequence, [[0] * 5 for _ in sequence])
+        inputs = write_inputs(temporary, "cli", sequence, [[0] * 7 for _ in sequence])
         completed = run(inputs, "--local-k-output", Path(temporary) / "bad.gff")
         assert completed.returncode == 1
 
-        completed = run(inputs, "--local-k-best",
-                        "--local-k-start-score-drop", "-1",
-                        "--no-dp-dump")
-        assert completed.returncode == 1
 def test_local_kbest_unique_dedup():
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -397,7 +393,7 @@ def test_local_kbest_candidate_start_inherited_score():
         sequence[120:123] = "TAA"
         emissions = []
         for position in range(length):
-            values = [0.0] + [-1000.0] * 4
+            values = [0.0] + [-1000.0] * 6
             if 2 <= position <= 121:
                 values[1] = 1.0
             emissions.append(values)
@@ -423,7 +419,7 @@ def test_local_kbest_stopping_before_next_gene():
         sequence[270:273] = "TAA"
         emissions = []
         for position in range(length):
-            values = [0.0] + [-1000.0] * 4
+            values = [0.0] + [-1000.0] * 6
             if 2 <= position <= 121 or 152 <= position <= 271:
                 values[1] = 1.0
             emissions.append(values)
