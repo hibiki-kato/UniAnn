@@ -53,3 +53,7 @@ src/compute_markov_scores
 src/test_classification
 src/*.o
 src/*.d
+
+# evaluation outputs live under the ignored data/ tree
+data/eval/
+eval/__pycache__/
