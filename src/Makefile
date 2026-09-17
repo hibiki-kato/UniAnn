@@ -34,11 +34,20 @@ debug:
 
 # Clean
 clean:
-	rm -f $(U_TARGET) $(U_OBJ) $(U_OBJ:.o=.d) $(C_TARGET) $(C_OBJ) $(C_OBJ:.o=.d)
+	rm -f $(U_TARGET) $(U_OBJ) $(U_OBJ:.o=.d) $(C_TARGET) $(C_OBJ) $(C_OBJ:.o=.d) test_metadata_states test_shared_trace
 
 .PHONY: all clean debug check
 
-check: $(U_TARGET)
+check: $(U_TARGET) test_metadata_states test_shared_trace
 	python3 ../tests/test_legacy.py
+	python3 ../tests/test_metadata_cli.py
 	python3 ../tests/test_wrapper.py
+	./test_metadata_states
+	./test_shared_trace
+
+test_metadata_states: ../tests/test_metadata_states.cpp metadata_states.h metadata_viterbi.h shared_trace.h viterbi_model.h
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+test_shared_trace: ../tests/test_shared_trace.cpp shared_trace.h
+	$(CXX) $(CXXFLAGS) -o $@ $<
 

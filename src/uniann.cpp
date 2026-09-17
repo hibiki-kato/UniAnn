@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include "viterbi_model.h"
+#include "metadata_viterbi.h"
 #include <limits>
 
 using namespace std;
@@ -268,8 +269,8 @@ void run_viterbi(
                 previous_metadata.predecessor_state = dp[i - 1][from].bt;
 
                 const auto edge = evaluate_transition(i, from, to, previous_metadata, inputs, site);
-                // Preserve upstream propagation of the finite NEG_INF sentinel:
-                // a forbidden edge still competes with a very low score.
+                // Preserve legacy propagation of the finite NEG_INF sentinel.
+                // The exact metadata decoder instead excludes forbidden edges.
                 double cand = dp[i - 1][from].dp + edge.transition_score + edge.emission_score;
 
                 if (cand > best) {
@@ -521,13 +522,16 @@ int run_uniann(int argc, char** argv) {
 
     if (argc < 7) {
         cerr << "Usage: " << argv[0]
-             << " seq.fasta emissions.txt gt.txt ag.txt atg.txt stop.txt [--no-dp-dump]\n";
+             << " seq.fasta emissions.txt gt.txt ag.txt atg.txt stop.txt\n"
+             << "       [--metadata-state-viterbi] [--no-dp-dump]\n";
         return 1;
     }
+    bool metadata_viterbi = false;
     bool no_dp_dump = false;
     for (int argument = 7; argument < argc; ++argument) {
         const string option = argv[argument];
-        if (option == "--no-dp-dump") no_dp_dump = true;
+        if (option == "--metadata-state-viterbi") metadata_viterbi = true;
+        else if (option == "--no-dp-dump") no_dp_dump = true;
         else throw invalid_argument("Unknown option: " + option);
     }
 
@@ -566,6 +570,19 @@ int run_uniann(int argc, char** argv) {
     auto trans = init_transitions();
     const ModelInputs inputs{emit, site_score, seq, trans};
 
+    if (metadata_viterbi) {
+        const auto path = decode_metadata_viterbi(inputs);
+        const string seqid = get_fasta_header(f_fasta);
+        GffPathWriter writer(seqid, f_fasta, state_name[path.runs.front().state],
+                             path.runs.front().score_at_start);
+        for (size_t run = 1; run < path.runs.size(); ++run) {
+            const auto &change = path.runs[run];
+            writer.transition(state_name[change.state], change.start, change.score_at_start);
+        }
+        writer.finish(L, path.score);
+        return 0;
+    }
+
     //--------------------------------------------------------
     // Initialize DP
     //--------------------------------------------------------
@@ -576,7 +593,7 @@ int run_uniann(int argc, char** argv) {
     //--------------------------------------------------------
     run_viterbi(dp, inputs);
 
-    //print DP and BT matrices unless the caller asked to skip the dump
+    // The optional diagnostic dump is only available for the legacy matrix.
     if (!no_dp_dump) {
       for (int i = 0; i < L; i++) {
       fprintf(stderr,"%d\tdp\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",i,int(dp[i][0].dp),int(dp[i][1].dp),int(dp[i][2].dp),int(dp[i][3].dp),int(dp[i][4].dp),int(dp[i][5].dp),int(dp[i][6].dp));

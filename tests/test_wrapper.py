@@ -33,8 +33,14 @@ def decoder_args(wrapper_flags):
 
 
 class WrapperTests(unittest.TestCase):
+    def test_metadata_flag_reaches_decoder(self):
+        self.assertEqual(decoder_args(['--metadata-state-viterbi']),
+                         INPUT_ARGS + ['--metadata-state-viterbi'])
+
     def test_noviterbi_skips_dump_and_keeps_following_flag(self):
         self.assertEqual(decoder_args(['-n', '-m', '2']), INPUT_ARGS + ['--no-dp-dump'])
+        self.assertEqual(decoder_args(['-n', '--metadata-state-viterbi']),
+                         INPUT_ARGS + ['--no-dp-dump', '--metadata-state-viterbi'])
 
     def test_default_keeps_dump(self):
         self.assertEqual(decoder_args([]), INPUT_ARGS)

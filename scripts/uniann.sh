@@ -45,6 +45,7 @@ echo "-m multiplier to rescale probabilities before applying log, must be a numb
 echo "-s file with scores for starts, stops and splice sites, 1-based coordinates"
 echo "-p psauron score file"
 echo "-n (flag) do not save Viterbi matrix in out.err"
+echo "--metadata-state-viterbi use metadata-aware best paths and shared traceback"
 }
 
 #parsing arguments
@@ -78,6 +79,9 @@ do
         -s|--scores)
             SCOREFILE="$2"
             shift
+            ;;
+        --metadata-state-viterbi)
+            DECODER_ARGS+=("--metadata-state-viterbi")
             ;;
         -v|--verbose)
             set -x
