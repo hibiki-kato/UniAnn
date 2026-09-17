@@ -42,6 +42,7 @@ check: $(U_TARGET) test_metadata_states test_shared_trace
 	python3 ../tests/test_legacy.py
 	python3 ../tests/test_metadata_cli.py
 	python3 ../tests/test_wrapper.py
+	python3 ../tests/test_benchmark.py
 	./test_metadata_states
 	./test_shared_trace
 
